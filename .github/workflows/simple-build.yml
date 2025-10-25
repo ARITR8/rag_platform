@@ -1,4 +1,4 @@
-name: Simple Build Test
+name: Simple Build Test (CPU-Only)
 
 on:
   push:
@@ -18,9 +18,16 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Install CPU-only dependencies
         run: |
           python -m pip install --upgrade pip
+          # Install CPU-only PyTorch first
+          pip install --no-cache-dir \
+            torch>=2.0.0+cpu \
+            torchvision>=0.15.0+cpu \
+            torchaudio>=2.0.0+cpu \
+            --index-url https://download.pytorch.org/whl/cpu
+          # Install other dependencies
           pip install -e ".[dev]"
 
       - name: Run basic tests
