@@ -1,0 +1,39 @@
+name: Simple Build Test
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: # Manual trigger
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Run basic tests
+        run: |
+          python -c "import src.app.main; print('✅ App imports successfully')"
+          python -c "from src.llm_service.domain.models import GenerateRequest; print('✅ Models import successfully')"
+          python -c "from src.retrieval_service.domain.models import RetrieveRequest; print('✅ Retrieval models import successfully')"
+
+      - name: Test Docker build
+        run: |
+          docker build -t rag-platform-test .
+          echo "✅ Docker build successful"
+
+      - name: Test Docker run
+        run: |
+          docker run --rm rag-platform-test python -c "print('✅ Docker container runs successfully')"

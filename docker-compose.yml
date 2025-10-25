@@ -14,56 +14,40 @@ services:
       timeout: 5s
       retries: 5
 
-  orchestrator:
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: rag_platform
+      POSTGRES_USER: rag_user
+      POSTGRES_PASSWORD: rag_password
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U rag_user -d rag_platform"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  rag-platform:
     build: .
     ports:
       - "8000:8000"
     environment:
       - REDIS_URL=redis://redis:6379
-      - LLM_SERVICE_URL=http://llm-service:8001
-      - RETRIEVAL_SERVICE_URL=http://retrieval-service:8002
+      - DATABASE_URL=postgresql://rag_user:rag_password@postgres:5432/rag_platform
       - ENVIRONMENT=development
     depends_on:
       redis:
         condition: service_healthy
-      llm-service:
-        condition: service_started
-      retrieval-service:
-        condition: service_started
-    volumes:
-      - ./src:/app/src
-      - ./tests:/app/tests
-    command: uvicorn src.orchestrator.main:app --host 0.0.0.0 --port 8000 --reload
-
-  llm-service:
-    build: .
-    ports:
-      - "8001:8001"
-    environment:
-      - REDIS_URL=redis://redis:6379
-      - ENVIRONMENT=development
-    depends_on:
-      redis:
+      postgres:
         condition: service_healthy
     volumes:
       - ./src:/app/src
       - ./tests:/app/tests
-    command: uvicorn src.llm_service.main:app --host 0.0.0.0 --port 8001 --reload
-
-  retrieval-service:
-    build: .
-    ports:
-      - "8002:8002"
-    environment:
-      - REDIS_URL=redis://redis:6379
-      - ENVIRONMENT=development
-    depends_on:
-      redis:
-        condition: service_healthy
-    volumes:
-      - ./src:/app/src
-      - ./tests:/app/tests
-    command: uvicorn src.retrieval_service.main:app --host 0.0.0.0 --port 8002 --reload
+    command: uvicorn src.app.main:app --host 0.0.0.0 --port 8000 --reload
 
 volumes:
   redis_data:
+  postgres_data:
