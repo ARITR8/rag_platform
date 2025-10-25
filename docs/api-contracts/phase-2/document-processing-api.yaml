@@ -1,0 +1,1227 @@
+openapi: 3.0.0
+info:
+  title: "RAG Platform - Document Processing API"
+  version: "1.0.0"
+  description: |
+    Enterprise Document Processing Service for RAG Platform Phase 2.
+
+    This API provides comprehensive document ingestion, processing, and management
+    capabilities for enterprise-scale RAG systems with support for:
+    - Multi-format document processing (PDF, DOCX, TXT, HTML, Markdown)
+    - Batch processing with progress tracking
+    - Real-time status monitoring
+    - Webhook-based event notifications
+    - GDPR compliance and legal hold
+    - Integration with existing RAG pipeline
+
+  contact:
+    name: Platform Engineering
+    email: infra@company.com
+  x-google-audit:
+    - "AUD-2024-07: Memory-safe upload validation"
+    - "AUD-2024-08: Zero-trust chunking"
+    - "AUD-2024-09: Enterprise document processing"
+
+servers:
+  - url: https://doc-processing.company.com/v1
+    description: "Production Document Processing API"
+    x-google-backends:
+      - us-central1
+      - europe-west4
+  - url: https://staging-doc-processing.company.com/v1
+    description: "Staging Environment"
+  - url: http://localhost:8003/v1
+    description: "Local Development"
+
+security:
+  - BearerAuth: []
+  - ApiKeyAuth: []
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      x-google-issuer: "https://auth.company.com"
+    ApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-Client-Version
+      description: "Semantic version (e.g. 2.1.0)"
+
+  schemas:
+    # === CORE DOCUMENT SCHEMAS ===
+    Document:
+      type: object
+      required:
+        - id
+        - status
+        - file_metadata
+        - created_at
+      properties:
+        id:
+          type: string
+          format: uuid
+          example: "550e8400-e29b-41d4-a716-446655440000"
+          x-google-field-policy: IMMUTABLE
+        status:
+          type: string
+          enum: [UPLOADING, PROCESSING, COMPLETED, FAILED, ARCHIVED]
+          x-google-state-diagram: |
+            UPLOADING → PROCESSING → COMPLETED
+                          ↓
+                        FAILED
+        file_metadata:
+          $ref: "#/components/schemas/FileMetadata"
+        processing_metadata:
+          $ref: "#/components/schemas/ProcessingMetadata"
+        chunks:
+          type: array
+          items:
+            $ref: "#/components/schemas/Chunk"
+          maxItems: 1000
+          x-google-entity-limit: "Contact support >1000 chunks"
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+          description: "Auto-deletion timestamp for compliance"
+
+    FileMetadata:
+      type: object
+      required:
+        - filename
+        - content_type
+        - size_bytes
+      properties:
+        filename:
+          type: string
+          maxLength: 255
+          example: "enterprise-policy-2024.pdf"
+        content_type:
+          type: string
+          enum:
+            - application/pdf
+            - application/vnd.openxmlformats-officedocument.wordprocessingml.document
+            - text/plain
+            - text/html
+            - text/markdown
+            - application/rtf
+        size_bytes:
+          type: integer
+          minimum: 1
+          maximum: 104857600 # 100MB
+          example: 2048576
+        language:
+          type: string
+          pattern: "^[a-z]{2}(-[A-Z]{2})?$"
+          example: "en-US"
+        encoding:
+          type: string
+          default: "utf-8"
+        checksum:
+          type: string
+          pattern: "^[a-f0-9]{64}$"
+          description: "SHA-256 hash"
+        original_url:
+          type: string
+          format: uri
+          description: "Source URL if uploaded from external source"
+
+    ProcessingMetadata:
+      type: object
+      properties:
+        processing_time_ms:
+          type: integer
+          description: "Total processing time in milliseconds"
+        chunk_count:
+          type: integer
+          description: "Number of chunks generated"
+        embedding_model:
+          type: string
+          example: "sentence-transformers/all-MiniLM-L6-v2"
+        chunking_strategy:
+          type: string
+          enum: [semantic, fixed, sentence, paragraph]
+          default: "semantic"
+        extraction_quality:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: "OCR confidence or text extraction quality"
+        processing_worker:
+          type: string
+          description: "Worker node that processed the document"
+        error_details:
+          $ref: "#/components/schemas/ProcessingError"
+
+    Chunk:
+      type: object
+      required:
+        - chunk_id
+        - document_id
+        - text
+        - position
+      properties:
+        chunk_id:
+          type: string
+          format: uuid
+        document_id:
+          type: string
+          format: uuid
+        text:
+          type: string
+          maxLength: 10000
+          x-google-sanitize: "STRIP_HTML"
+        position:
+          $ref: "#/components/schemas/ChunkPosition"
+        vector_id:
+          type: string
+          format: uuid
+          description: "Reference to vector embedding"
+        metadata:
+          $ref: "#/components/schemas/ChunkMetadata"
+
+    ChunkPosition:
+      type: object
+      properties:
+        start_char:
+          type: integer
+          description: "Starting character position in document"
+        end_char:
+          type: integer
+          description: "Ending character position in document"
+        page_number:
+          type: integer
+          description: "Page number (for PDFs)"
+        section:
+          type: string
+          description: "Document section or heading"
+        paragraph_index:
+          type: integer
+          description: "Paragraph index within document"
+
+    ChunkMetadata:
+      type: object
+      properties:
+        confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+          description: "Extraction confidence score"
+        language:
+          type: string
+          pattern: "^[a-z]{2}(-[A-Z]{2})?$"
+        entities:
+          type: array
+          items:
+            type: string
+          description: "Named entities found in chunk"
+        topics:
+          type: array
+          items:
+            type: string
+          description: "Detected topics or categories"
+
+    # === BATCH PROCESSING SCHEMAS ===
+    BatchProcessingRequest:
+      type: object
+      required:
+        - documents
+      properties:
+        documents:
+          type: array
+          items:
+            $ref: "#/components/schemas/BatchDocument"
+          maxItems: 100
+        processing_options:
+          $ref: "#/components/schemas/ProcessingOptions"
+        callback_url:
+          type: string
+          format: uri
+          description: "Webhook URL for completion notifications"
+
+    BatchDocument:
+      type: object
+      required:
+        - file_url
+      properties:
+        file_url:
+          type: string
+          format: uri
+          x-google-validation: "^(gs|s3|https)://"
+        metadata:
+          $ref: "#/components/schemas/FileMetadata"
+        processing_options:
+          $ref: "#/components/schemas/ProcessingOptions"
+
+    ProcessingOptions:
+      type: object
+      properties:
+        priority:
+          type: string
+          enum: [LOW, STANDARD, HIGH]
+          default: "STANDARD"
+        chunking_strategy:
+          type: string
+          enum: [semantic, fixed, sentence, paragraph]
+          default: "semantic"
+        chunk_size:
+          type: integer
+          default: 1000
+          minimum: 100
+          maximum: 5000
+        overlap:
+          type: integer
+          default: 200
+          minimum: 0
+          maximum: 500
+        embedding_model:
+          type: string
+          default: "sentence-transformers/all-MiniLM-L6-v2"
+        language_detection:
+          type: boolean
+          default: true
+        ocr_enabled:
+          type: boolean
+          default: true
+
+    BatchProcessingResponse:
+      type: object
+      required:
+        - batch_id
+        - estimated_completion
+        - total_documents
+      properties:
+        batch_id:
+          type: string
+          format: uuid
+        estimated_completion:
+          type: string
+          format: date-time
+        total_documents:
+          type: integer
+        processing_options:
+          $ref: "#/components/schemas/ProcessingOptions"
+
+    BatchStatus:
+      type: object
+      required:
+        - batch_id
+        - status
+        - progress
+      properties:
+        batch_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [PENDING, PROCESSING, COMPLETED, FAILED, PARTIAL]
+        progress:
+          $ref: "#/components/schemas/ProcessingProgress"
+        results:
+          type: array
+          items:
+            $ref: "#/components/schemas/BatchResult"
+        created_at:
+          type: string
+          format: date-time
+        completed_at:
+          type: string
+          format: date-time
+
+    ProcessingProgress:
+      type: object
+      properties:
+        total_documents:
+          type: integer
+        processed_documents:
+          type: integer
+        failed_documents:
+          type: integer
+        current_document:
+          type: string
+          format: uuid
+        estimated_remaining_time:
+          type: integer
+          description: "Estimated seconds remaining"
+
+    BatchResult:
+      type: object
+      required:
+        - document_id
+        - status
+      properties:
+        document_id:
+          type: string
+          format: uuid
+        status:
+          type: string
+          enum: [SUCCESS, FAILED]
+        error_message:
+          type: string
+        processing_time_ms:
+          type: integer
+        chunk_count:
+          type: integer
+
+    # === WEBHOOK SCHEMAS ===
+    WebhookRegistration:
+      type: object
+      required:
+        - url
+        - events
+      properties:
+        url:
+          type: string
+          format: uri
+        events:
+          type: array
+          items:
+            type: string
+            enum:
+              - document.uploaded
+              - document.processing
+              - document.completed
+              - document.failed
+              - batch.completed
+              - batch.failed
+        secret:
+          type: string
+          description: "HMAC secret for webhook verification"
+        active:
+          type: boolean
+          default: true
+
+    WebhookEvent:
+      type: object
+      required:
+        - event_type
+        - timestamp
+        - data
+      properties:
+        event_type:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        data:
+          type: object
+          description: "Event-specific data payload"
+        webhook_id:
+          type: string
+          format: uuid
+
+    # === ERROR SCHEMAS ===
+    ProcessingError:
+      type: object
+      properties:
+        error_code:
+          type: string
+          enum:
+            - FILE_TOO_LARGE
+            - UNSUPPORTED_FORMAT
+            - CORRUPTED_FILE
+            - EXTRACTION_FAILED
+            - CHUNKING_FAILED
+            - EMBEDDING_FAILED
+            - STORAGE_FAILED
+        error_message:
+          type: string
+        failed_chunks:
+          type: array
+          items:
+            type: integer
+        retry_after:
+          type: integer
+          description: "Seconds to wait before retry"
+
+    ErrorResponse:
+      type: object
+      required:
+        - error
+        - message
+        - timestamp
+      properties:
+        error:
+          type: string
+        message:
+          type: string
+        timestamp:
+          type: string
+          format: date-time
+        details:
+          type: object
+        request_id:
+          type: string
+          format: uuid
+
+    # === RAG INTEGRATION SCHEMAS ===
+    DocumentSearchRequest:
+      type: object
+      required:
+        - query
+      properties:
+        query:
+          type: string
+          maxLength: 1000
+        limit:
+          type: integer
+          default: 5
+          maximum: 50
+        filters:
+          $ref: "#/components/schemas/SearchFilters"
+
+    SearchFilters:
+      type: object
+      properties:
+        min_confidence:
+          type: number
+          minimum: 0
+          maximum: 1
+        page_range:
+          type: object
+          properties:
+            start_page:
+              type: integer
+            end_page:
+              type: integer
+        language:
+          type: string
+        date_range:
+          type: object
+          properties:
+            start_date:
+              type: string
+              format: date
+            end_date:
+              type: string
+              format: date
+
+  parameters:
+    X-Idempotency-Key:
+      name: X-Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        format: uuid
+      description: "Prevents duplicate processing"
+      x-google-ttl: "24h"
+
+    X-Processing-Timeout:
+      name: X-Processing-Timeout
+      in: header
+      schema:
+        type: integer
+        default: 300
+        maximum: 3600
+      description: "Processing timeout in seconds"
+
+    X-Max-Concurrent-Processing:
+      name: X-Max-Concurrent-Processing
+      in: header
+      schema:
+        type: integer
+        default: 10
+        maximum: 100
+      description: "Maximum concurrent processing jobs per user"
+
+  responses:
+    DocumentResponse:
+      description: "Document information"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Document"
+
+    BatchResponse:
+      description: "Batch processing response"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/BatchProcessingResponse"
+
+    ErrorResponse:
+      description: "Error response"
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/ErrorResponse"
+
+paths:
+  # === DOCUMENT MANAGEMENT ENDPOINTS ===
+  /documents:
+    post:
+      summary: "Upload document for processing"
+      description: |
+        Upload a document for processing. Supports streaming upload for large files.
+        Returns immediately with document ID and processing status.
+      operationId: documents.upload
+      x-google-http-rule:
+        post: "/v1/documents"
+        body: "*"
+      parameters:
+        - $ref: "#/components/parameters/X-Idempotency-Key"
+        - $ref: "#/components/parameters/X-Processing-Timeout"
+      requestBody:
+        required: true
+        content:
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                file:
+                  type: string
+                  format: binary
+                  x-google-max-size: 100MB
+                metadata:
+                  $ref: "#/components/schemas/FileMetadata"
+                processing_options:
+                  $ref: "#/components/schemas/ProcessingOptions"
+      responses:
+        202:
+          description: "Document accepted for processing"
+          headers:
+            X-Processing-Estimate:
+              schema:
+                type: integer
+                description: "Estimated seconds until completion"
+                example: 30
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Document"
+        400:
+          $ref: "#/components/responses/ErrorResponse"
+        413:
+          description: "File exceeds 100MB limit"
+          x-google-retryable: false
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+        429:
+          description: "Rate limited"
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                example: 30
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    get:
+      summary: "List documents"
+      description: "Retrieve a paginated list of documents with optional filtering"
+      operationId: documents.list
+      parameters:
+        - name: status
+          in: query
+          schema:
+            type: string
+            enum: [UPLOADING, PROCESSING, COMPLETED, FAILED, ARCHIVED]
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 20
+            maximum: 100
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: created_after
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: created_before
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        200:
+          description: "List of documents"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  documents:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Document"
+                  total:
+                    type: integer
+                  limit:
+                    type: integer
+                  offset:
+                    type: integer
+
+  /documents/{document_id}:
+    get:
+      summary: "Get document details"
+      description: "Retrieve detailed information about a specific document"
+      operationId: documents.get
+      parameters:
+        - name: document_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: include_chunks
+          in: query
+          schema:
+            type: boolean
+            default: false
+      responses:
+        200:
+          $ref: "#/components/responses/DocumentResponse"
+        404:
+          description: "Document not found"
+          x-google-retryable: true
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+    delete:
+      summary: "Delete document"
+      description: "Delete a document and all associated chunks (GDPR compliant)"
+      operationId: documents.delete
+      parameters:
+        - name: document_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: X-Legal-Hold
+          in: header
+          schema:
+            type: boolean
+            default: false
+          description: "Prevent deletion if legal hold is active"
+      responses:
+        202:
+          description: "Document marked for deletion"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Document marked for deletion"
+                  deletion_scheduled:
+                    type: string
+                    format: date-time
+        409:
+          description: "Document cannot be deleted (legal hold active)"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ErrorResponse"
+
+  /documents/{document_id}/chunks:
+    get:
+      summary: "Get document chunks"
+      description: "Retrieve all chunks for a specific document with pagination"
+      operationId: documents.getChunks
+      parameters:
+        - name: document_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            default: 100
+            maximum: 1000
+        - name: offset
+          in: query
+          schema:
+            type: integer
+            default: 0
+        - name: min_confidence
+          in: query
+          schema:
+            type: number
+            minimum: 0
+            maximum: 1
+      responses:
+        200:
+          description: "Document chunks"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  chunks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Chunk"
+                  total:
+                    type: integer
+                  document_id:
+                    type: string
+                    format: uuid
+
+    post:
+      summary: "Re-chunk document"
+      description: "Trigger re-chunking of a document with new strategy"
+      operationId: documents.rechunk
+      parameters:
+        - name: document_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ProcessingOptions"
+      responses:
+        202:
+          description: "Re-chunking started"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Re-chunking started"
+                  processing_id:
+                    type: string
+                    format: uuid
+
+  /documents/{document_id}/status:
+    get:
+      summary: "Get document processing status"
+      description: "Get detailed processing status and progress information"
+      operationId: documents.getStatus
+      parameters:
+        - name: document_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        200:
+          description: "Processing status"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  document_id:
+                    type: string
+                    format: uuid
+                  status:
+                    type: string
+                    enum: [UPLOADING, PROCESSING, COMPLETED, FAILED]
+                  progress:
+                    type: object
+                    properties:
+                      chunks_processed:
+                        type: integer
+                      total_chunks:
+                        type: integer
+                      current_stage:
+                        type: string
+                        enum: [extraction, chunking, embedding, indexing]
+                      estimated_completion:
+                        type: string
+                        format: date-time
+                  error_details:
+                    $ref: "#/components/schemas/ProcessingError"
+
+  /documents/{document_id}/embed:
+    post:
+      summary: "Trigger embedding generation"
+      description: "Generate embeddings for document chunks"
+      operationId: documents.generateEmbeddings
+      parameters:
+        - name: document_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                embedding_model:
+                  type: string
+                  default: "sentence-transformers/all-MiniLM-L6-v2"
+                force_regenerate:
+                  type: boolean
+                  default: false
+      responses:
+        202:
+          description: "Embedding generation started"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  message:
+                    type: string
+                    example: "Embedding generation started"
+                  embedding_job_id:
+                    type: string
+                    format: uuid
+
+  # === BATCH PROCESSING ENDPOINTS ===
+  /documents/batch:
+    post:
+      summary: "Batch document processing"
+      description: "Process multiple documents in batch with progress tracking"
+      operationId: documents.batchProcess
+      x-google-quota: "1000 requests/minute"
+      parameters:
+        - $ref: "#/components/parameters/X-Idempotency-Key"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/BatchProcessingRequest"
+      responses:
+        202:
+          $ref: "#/components/responses/BatchResponse"
+        400:
+          $ref: "#/components/responses/ErrorResponse"
+        429:
+          description: "Rate limited"
+          headers:
+            Retry-After:
+              schema:
+                type: integer
+                example: 30
+
+  /documents/batch/{batch_id}:
+    get:
+      summary: "Get batch processing status"
+      description: "Retrieve status and results of batch processing job"
+      operationId: documents.getBatchStatus
+      parameters:
+        - name: batch_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        200:
+          description: "Batch processing status"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/BatchStatus"
+
+  # === RAG INTEGRATION ENDPOINTS ===
+  /documents/{document_id}/search:
+    post:
+      summary: "Search within document"
+      description: "Search within document chunks using RAG pipeline"
+      operationId: documents.search
+      parameters:
+        - name: document_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DocumentSearchRequest"
+      responses:
+        200:
+          description: "Search results"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  query:
+                    type: string
+                  results:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/Chunk"
+                  total_results:
+                    type: integer
+                  search_time_ms:
+                    type: integer
+
+  # === WEBHOOK ENDPOINTS ===
+  /webhooks:
+    post:
+      summary: "Register webhook"
+      description: "Register a webhook for document processing events"
+      operationId: webhooks.register
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookRegistration"
+      responses:
+        201:
+          description: "Webhook registered"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  webhook_id:
+                    type: string
+                    format: uuid
+                  created_at:
+                    type: string
+                    format: date-time
+                  status:
+                    type: string
+                    enum: [active, inactive]
+
+    get:
+      summary: "List webhooks"
+      description: "List all registered webhooks"
+      operationId: webhooks.list
+      responses:
+        200:
+          description: "List of webhooks"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  webhooks:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/WebhookRegistration"
+
+  /webhooks/{webhook_id}:
+    get:
+      summary: "Get webhook details"
+      operationId: webhooks.get
+      parameters:
+        - name: webhook_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        200:
+          description: "Webhook details"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookRegistration"
+
+    put:
+      summary: "Update webhook"
+      operationId: webhooks.update
+      parameters:
+        - name: webhook_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/WebhookRegistration"
+      responses:
+        200:
+          description: "Webhook updated"
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/WebhookRegistration"
+
+    delete:
+      summary: "Delete webhook"
+      operationId: webhooks.delete
+      parameters:
+        - name: webhook_id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        204:
+          description: "Webhook deleted"
+
+  # === COMPLIANCE ENDPOINTS ===
+  /compliance/legal-hold:
+    post:
+      summary: "Create legal hold"
+      description: "Create a legal hold on documents for compliance"
+      operationId: compliance.createLegalHold
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                document_ids:
+                  type: array
+                  items:
+                    type: string
+                    format: uuid
+                reason:
+                  type: string
+                expires_at:
+                  type: string
+                  format: date-time
+      responses:
+        201:
+          description: "Legal hold created"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  legal_hold_id:
+                    type: string
+                    format: uuid
+                  affected_documents:
+                    type: integer
+
+  /compliance/audit-trail:
+    get:
+      summary: "Get audit trail"
+      description: "Retrieve audit trail for compliance reporting"
+      operationId: compliance.getAuditTrail
+      parameters:
+        - name: document_id
+          in: query
+          schema:
+            type: string
+            format: uuid
+        - name: start_date
+          in: query
+          schema:
+            type: string
+            format: date-time
+        - name: end_date
+          in: query
+          schema:
+            type: string
+            format: date-time
+      responses:
+        200:
+          description: "Audit trail"
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  events:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        timestamp:
+                          type: string
+                          format: date-time
+                        event_type:
+                          type: string
+                        document_id:
+                          type: string
+                          format: uuid
+                        user_id:
+                          type: string
+                        details:
+                          type: object
+
+# === GLOBAL RESPONSES ===
+responses:
+  400:
+    description: "Bad Request"
+    content:
+      application/json:
+        schema:
+          $ref: "#/components/schemas/ErrorResponse"
+
+  401:
+    description: "Unauthorized"
+    content:
+      application/json:
+        schema:
+          $ref: "#/components/schemas/ErrorResponse"
+
+  403:
+    description: "Forbidden"
+    content:
+      application/json:
+        schema:
+          $ref: "#/components/schemas/ErrorResponse"
+
+  404:
+    description: "Not Found"
+    content:
+      application/json:
+        schema:
+          $ref: "#/components/schemas/ErrorResponse"
+
+  429:
+    description: "Rate Limited"
+    headers:
+      Retry-After:
+        schema:
+          type: integer
+          example: 30
+    content:
+      application/json:
+        schema:
+          $ref: "#/components/schemas/ErrorResponse"
+
+  500:
+    description: "Internal Server Error"
+    content:
+      application/json:
+        schema:
+          $ref: "#/components/schemas/ErrorResponse"
+
+  503:
+    description: "Service Unavailable"
+    x-google-retry-strategy: "exponential_backoff"
+    content:
+      application/json:
+        schema:
+          $ref: "#/components/schemas/ErrorResponse"
