@@ -13,11 +13,8 @@ RUN apt-get update && apt-get install -y \
 COPY pyproject.toml ./
 
 # Install CPU-only PyTorch first (to avoid CUDA dependencies)
-RUN pip install --no-cache-dir \
-    torch>=2.0.0+cpu \
-    torchvision>=0.15.0+cpu \
-    torchaudio>=2.0.0+cpu \
-    --index-url https://download.pytorch.org/whl/cpu
+COPY requirements-cpu.txt ./
+RUN pip install --no-cache-dir -r requirements-cpu.txt --index-url https://download.pytorch.org/whl/cpu
 
 # Install other dependencies
 RUN pip install --no-cache-dir -e ".[dev]"
