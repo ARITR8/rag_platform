@@ -9,19 +9,17 @@ RUN apt-get update && apt-get install -y \
     g++ \
     && rm -rf /var/lib/apt/lists/*
 
-# Copy project configuration
-COPY pyproject.toml ./
-
-# Install CPU-only PyTorch first (to avoid CUDA dependencies)
+# Copy project configuration and source code first
+COPY setup.py ./
 COPY requirements-cpu.txt ./
-RUN pip install --no-cache-dir -r requirements-cpu.txt --index-url https://download.pytorch.org/whl/cpu
-
-# Install other dependencies
-RUN pip install --no-cache-dir -e ".[dev]"
-
-# Copy source code
 COPY src/ ./src/
 COPY tests/ ./tests/
+
+# Install CPU-only PyTorch first (to avoid CUDA dependencies)
+RUN pip install --no-cache-dir -r requirements-cpu.txt --index-url https://download.pytorch.org/whl/cpu
+
+# Install other dependencies (excluding PyTorch which is already installed)
+RUN pip install --no-cache-dir -e ".[dev]"
 
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash app && \

@@ -1,0 +1,55 @@
+from setuptools import find_packages, setup
+
+setup(
+    name="rag-platform",
+    version="0.1.0",
+    description="Enterprise RAG Platform - Phase 1 MVP",
+    packages=find_packages(where="src"),
+    package_dir={"": "src"},
+    python_requires=">=3.10",
+    install_requires=[
+        "fastapi==0.109.1",
+        "uvicorn[standard]==0.27.0",
+        "pydantic==2.6.4",
+        "redis==5.0.3",
+        "python-dotenv==1.0.0",
+        "httpx==0.27.0",
+        "sentence-transformers==2.3.1",
+        "faiss-cpu==1.12.0",
+        "rank-bm25==0.2.2",
+        "opentelemetry-sdk==1.22.0",
+        "transformers>=4.30.0",
+        "numpy>=1.24.0",
+        "scikit-learn>=1.3.0",
+        # PyTorch will be installed separately via requirements-cpu.txt with CPU index
+    ],
+    extras_require={
+        "dev": [
+            "pytest==7.4.3",
+            "pytest-asyncio==0.21.1",
+            "pytest-cov==4.1.0",
+            "pytest-mock==3.12.0",
+            "locust==2.20.2",
+            "black==23.12.1",
+            "isort==5.13.2",
+            "ruff==0.2.2",
+            "mypy==1.8.0",
+            "types-redis>=4.6.0.20241004",
+            "pre-commit>=3.6.0",
+        ],
+        "test": [
+            "pytest==7.4.3",
+            "pytest-asyncio==0.21.1",
+            "pytest-cov==4.1.0",
+            "pytest-mock==3.12.0",
+            "locust==2.20.2",
+        ],
+        "lint": [
+            "black==23.12.1",
+            "isort==5.13.2",
+            "ruff==0.2.2",
+            "mypy==1.8.0",
+            "types-redis>=4.6.0.20241004",
+        ],
+    },
+)
