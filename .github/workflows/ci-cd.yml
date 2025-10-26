@@ -45,10 +45,10 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Set up Python 3.11
+      - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.12"
           cache: "pip"
 
       - name: Cache pip dependencies
@@ -65,7 +65,7 @@ jobs:
           # Install CPU-only PyTorch first
           pip install --no-cache-dir -r requirements-cpu.txt --index-url https://download.pytorch.org/whl/cpu
           # Install other dependencies
-          pip install --no-cache-dir -e ".[dev,test]"
+          pip install --no-cache-dir -e ".[dev]"
 
       - name: Run code formatting check (Black)
         run: black --check src/ tests/
